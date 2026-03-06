@@ -21,6 +21,7 @@ public sealed class InverseBooleanConverter : IValueConverter
     {
         if (value is bool boolValue)
         {
+            // RadioButton 取消选中时写回 false，返回 DoNothing 避免写回 true 引发绑定循环
             return boolValue ? (object)false : System.Windows.Data.Binding.DoNothing;
         }
 

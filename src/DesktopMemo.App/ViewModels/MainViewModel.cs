@@ -1292,8 +1292,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             return;
         }
-        
-        // 保存当前页面状态
+
+        // 与当前一致则跳过，避免 GroupName 取消选中 → 写回 → 保存 → 绑定刷新 → 递归
         var currentPage = value ? "todo" : "memo";
         if (WindowSettings.CurrentPage == currentPage)
         {
