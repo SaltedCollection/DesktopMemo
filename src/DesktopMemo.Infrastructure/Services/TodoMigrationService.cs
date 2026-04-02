@@ -34,7 +34,7 @@ public sealed class TodoMigrationService
         var sqliteDb = Path.Combine(dataDirectory, "todos.db");
         var backupFile = Path.Combine(dataDirectory, $"todos_backup_{DateTime.Now:yyyyMMddHHmmss}.json");
 
-        // 如果 SQLite 数据库已存在且包含数据，则认为已经迁移过
+        // 若目标库已有数据，则认为迁移已完成，避免重复导入造成重复记录。
         if (File.Exists(sqliteDb))
         {
             try
@@ -42,7 +42,7 @@ public sealed class TodoMigrationService
                 using var connection = new SqliteConnection($"Data Source={sqliteDb}");
                 connection.Open();
 
-                // 确保表存在（可能是空数据库）
+                // 有些用户可能已经生成了空数据库，因此先补齐表结构再判断是否需要迁移。
                 using var initCmd = connection.CreateCommand();
                 initCmd.CommandText = @"
                     CREATE TABLE IF NOT EXISTS todos (
@@ -77,7 +77,7 @@ public sealed class TodoMigrationService
                 else
                 {
                     _logger?.LogInformation("⚠ 检测到 SQLite 数据库存在但为空，将尝试从 JSON 进行迁移");
-                    // 继续执行迁移逻辑（不 return）
+                    // 空库允许继续从旧 JSON 导入。
                 }
             }
             catch (Exception ex)
@@ -87,7 +87,7 @@ public sealed class TodoMigrationService
             }
         }
 
-        // 如果 JSON 文件不存在，则没有数据需要迁移
+        // 源文件不存在时说明没有历史数据，属于正常情况。
         if (!File.Exists(jsonFile))
         {
             _logger?.LogInformation("未找到 JSON 文件，无需迁移");
@@ -98,7 +98,7 @@ public sealed class TodoMigrationService
         {
             _logger?.LogInformation("开始从 JSON 迁移到 SQLite...");
 
-            // 1. 读取 JSON 数据
+            // 1. 先用旧仓储读取 JSON，复用原有解析逻辑避免重复实现。
             var jsonRepository = new JsonTodoRepository(dataDirectory);
             var todos = await jsonRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
 
@@ -106,7 +106,7 @@ public sealed class TodoMigrationService
             {
                 _logger?.LogInformation("JSON 文件为空，无需迁移");
                 
-                // 即使数据为空，也创建 SQLite 数据库并备份 JSON 文件
+                // 即使 JSON 为空，也生成新库并备份源文件，表示迁移流程已跑完。
                 var emptyRepo = new SqliteTodoRepository(dataDirectory);
                 emptyRepo.Dispose();
                 
@@ -119,7 +119,7 @@ public sealed class TodoMigrationService
                 return new MigrationResult(true, 0, "JSON 文件为空");
             }
 
-            // 2. 创建 SQLite 数据库并写入数据
+            // 2. 再批量写入 SQLite，完成新格式落地。
             using (var sqliteRepository = new SqliteTodoRepository(dataDirectory))
             {
                 foreach (var todo in todos)
@@ -128,7 +128,7 @@ public sealed class TodoMigrationService
                 }
             }
 
-            // 3. 备份原 JSON 文件
+            // 3. 最后备份旧文件，避免后续再次被识别成待迁移数据源。
             File.Move(jsonFile, backupFile);
 
             _logger?.LogInformation("✅ 成功迁移 {Count} 条待办事项", todos.Count);

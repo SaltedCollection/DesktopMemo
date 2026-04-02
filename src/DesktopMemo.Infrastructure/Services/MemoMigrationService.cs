@@ -9,6 +9,10 @@ using Markdig;
 
 namespace DesktopMemo.Infrastructure.Services;
 
+/// <summary>
+/// 旧版备忘录导入服务。
+/// 用于把早期版本保存在应用目录下的 Markdown 数据导入到新模型中。
+/// </summary>
 public sealed class MemoMigrationService
 {
     private readonly string _dataDirectory;
@@ -23,11 +27,14 @@ public sealed class MemoMigrationService
 
     public string ExportDirectory { get; }
 
+    /// <summary>
+    /// 扫描旧版 `Data/content` 目录中的 Markdown 文件并转换为 Memo。
+    /// </summary>
     public async Task<IReadOnlyList<Memo>> LoadFromLegacyAsync()
     {
         var results = new List<Memo>();
         
-        // 在应用程序目录下查找旧应用数据目录 Data/content
+        // 旧版本把数据放在程序目录下，迁移时按原布局直接扫描。
         var legacyContentDir = Path.Combine(_appDirectory, "Data", "content");
 
         if (Directory.Exists(legacyContentDir))
@@ -43,11 +50,14 @@ public sealed class MemoMigrationService
             }
         }
 
-        // TODO: 支持旧 JSON 格式迁移，可参考 .old 逻辑
+        // 目前只支持 Markdown 目录导入，更多历史格式留待后续补齐。
 
         return results;
     }
 
+    /// <summary>
+    /// 把旧 Markdown 文件转换为当前 Memo 模型。
+    /// </summary>
     private static Memo? ParseMarkdown(string fileName, string markdown, DateTime created, DateTime updated)
     {
         if (string.IsNullOrWhiteSpace(markdown))
@@ -55,6 +65,7 @@ public sealed class MemoMigrationService
             return null;
         }
 
+        // 当前只需要提取标题与时间，解析 Markdown 主要是为后续扩展保留入口。
         var pipeline = new MarkdownPipelineBuilder().Build();
         var document = Markdown.Parse(markdown, pipeline);
 
@@ -80,6 +91,9 @@ public sealed class MemoMigrationService
             false);
     }
 
+    /// <summary>
+    /// 为迁移进来的旧备忘录生成列表预览文本。
+    /// </summary>
     private static string BuildPreview(string content)
     {
         if (string.IsNullOrWhiteSpace(content))

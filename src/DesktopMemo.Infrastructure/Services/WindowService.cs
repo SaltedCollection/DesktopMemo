@@ -9,6 +9,10 @@ using System.Diagnostics;
 
 namespace DesktopMemo.Infrastructure.Services;
 
+/// <summary>
+/// 封装 WPF 主窗口的显示、层级、透明度和穿透行为。
+/// 该服务是 UI 层与 Win32 窗口操作之间的隔离层。
+/// </summary>
 public class WindowService : IWindowService, IDisposable
 {
     private Window? _window;
@@ -17,7 +21,7 @@ public class WindowService : IWindowService, IDisposable
     private bool _isClickThroughEnabled = false;
     private bool _isWindowActivatedHandlerAttached = false;
 
-    // Win32 API 常量
+    // Win32 API 扩展样式常量，用于控制穿透与分层渲染。
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_LAYERED = 0x00080000;
@@ -54,11 +58,14 @@ public class WindowService : IWindowService, IDisposable
     private const int SW_HIDE = 0;
     private const int SW_SHOW = 5;
 
+    /// <summary>
+    /// 绑定实际窗口实例，并挂接桌面模式需要的激活事件。
+    /// </summary>
     public void Initialize(Window window)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
-        
-        // 订阅窗口激活事件，用于桌面置顶模式
+
+        // 桌面模式下窗口被系统重新激活后，层级可能变化，需要再次校正。
         if (!_isWindowActivatedHandlerAttached)
         {
             _window.Activated += OnWindowActivated;
@@ -81,6 +88,7 @@ public class WindowService : IWindowService, IDisposable
 
         _currentTopmostMode = mode;
 
+        // 三种模式分别映射到普通层级、桌面层级和系统置顶层级。
         switch (mode)
         {
             case TopmostMode.Normal:
@@ -126,10 +134,12 @@ public class WindowService : IWindowService, IDisposable
 
         if (enabled)
         {
+            // 透明点击依赖 WS_EX_TRANSPARENT；分层窗口样式则保证透明度/命中表现稳定。
             exStyle |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
         }
         else
         {
+            // 关闭穿透时保留分层样式，避免影响窗口透明度控制。
             exStyle &= ~WS_EX_TRANSPARENT;
         }
 
@@ -161,6 +171,7 @@ public class WindowService : IWindowService, IDisposable
         try
         {
             var workingArea = SystemParameters.WorkArea;
+            // 保留一小段可见区域，避免窗口被拖出屏幕后用户无法再拖回来。
             double minX = workingArea.Left - _window.Width + 50;
             double maxX = workingArea.Right - 50;
             double minY = workingArea.Top;
@@ -198,6 +209,7 @@ public class WindowService : IWindowService, IDisposable
         double windowWidth = _window.Width;
         double windowHeight = _window.Height;
 
+        // 预设位置本质上是基于工作区做九宫格定位。
         switch (position)
         {
             case "TopLeft":
@@ -245,6 +257,10 @@ public class WindowService : IWindowService, IDisposable
 
     private double _backgroundOpacity = WindowConstants.DEFAULT_TRANSPARENCY; // 存储背景透明度值
 
+    /// <summary>
+    /// 保存背景透明度数值。
+    /// 实际视觉生效由 View 层绑定或样式逻辑消费该值。
+    /// </summary>
     public void SetWindowOpacity(double opacity)
     {
         // 验证透明度值是否有效
@@ -263,6 +279,9 @@ public class WindowService : IWindowService, IDisposable
         return _backgroundOpacity; // 返回存储的背景透明度值
     }
 
+    /// <summary>
+    /// 播放窗口淡入动画，用于首次显示或从托盘恢复时的过渡。
+    /// </summary>
     public void PlayFadeInAnimation()
     {
         if (_window == null)
@@ -336,22 +355,21 @@ public class WindowService : IWindowService, IDisposable
     {
         try
         {
-            // 首先设置为非置顶
+            // 先取消系统级置顶，避免它压过正常应用窗口。
             SafeSetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-设置非置顶");
-            
-            // 找到Program Manager
+
+            // Program Manager / WorkerW 是 Windows 桌面图标层级体系中的关键窗口。
             IntPtr progmanHwnd = FindWindow("Progman", "Program Manager");
-            
+
             if (progmanHwnd != IntPtr.Zero && IsWindow(progmanHwnd))
             {
-                // 发送消息以获取WorkerW窗口
-                IntPtr result = IntPtr.Zero;
+                // 某些系统需要先唤起 WorkerW，桌面图标视图才会暴露出来。
                 SendMessage(progmanHwnd, 0x052C, IntPtr.Zero, IntPtr.Zero);
-                
-                // 查找WorkerW窗口
+
+                // 遍历 WorkerW，定位包含桌面图标视图的那一层。
                 IntPtr workerw = IntPtr.Zero;
                 IntPtr shellDllDefView = IntPtr.Zero;
-                
+
                 do
                 {
                     workerw = FindWindowEx(IntPtr.Zero, workerw, "WorkerW", null!);
@@ -365,28 +383,27 @@ public class WindowService : IWindowService, IDisposable
                     }
                 } while (workerw != IntPtr.Zero);
                 
-                // 将窗口放置在适当的位置
                 if (workerw != IntPtr.Zero)
                 {
-                    // 放置在WorkerW之上
+                    // 放到 WorkerW 之上，可实现“压在桌面上、但又不抢到应用最前”的效果。
                     SafeSetWindowPos(hwnd, workerw, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-WorkerW上方");
                 }
                 else
                 {
-                    // 如果找不到WorkerW，使用传统方法
+                    // 老系统或特殊壳层下可能找不到 WorkerW，退回到较保守的放置方式。
                     SafeSetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-底部");
                     SafeSetWindowPos(hwnd, progmanHwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-Progman上方");
                 }
             }
             else
             {
-                // 如果找不到Program Manager，直接放置在底部
+                // 若系统窗口结构识别失败，至少保证不会错误置顶到普通应用之上。
                 SafeSetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-找不到Progman");
             }
         }
         catch
         {
-            // 如果任何操作失败，使用最简单的方法
+            // 任一步骤出错都退回到底层放置，优先保证稳定性。
             SafeSetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE, "桌面模式-异常处理");
         }
     }
@@ -399,13 +416,13 @@ public class WindowService : IWindowService, IDisposable
     /// </summary>
     private void OnWindowActivated(object? sender, EventArgs e)
     {
-        // 仅在桌面置顶模式下处理
+        // 普通模式和系统置顶模式无需重复纠正层级。
         if (_currentTopmostMode == TopmostMode.Desktop && _window != null)
         {
             var hwnd = new WindowInteropHelper(_window).Handle;
             if (hwnd != IntPtr.Zero)
             {
-                // 延迟执行，确保窗口激活完成后再调整层级
+                // 延后到后台优先级执行，避免与当前激活过程抢占消息循环。
                 System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
                     new Action(() => SetDesktopTopmost(hwnd)),
                     System.Windows.Threading.DispatcherPriority.Background);
@@ -442,7 +459,7 @@ public class WindowService : IWindowService, IDisposable
 
         _disposed = true;
         
-        // 取消订阅窗口激活事件
+        // 释放前取消事件订阅，避免窗口对象被服务意外持有。
         if (_window != null && _isWindowActivatedHandlerAttached)
         {
             _window.Activated -= OnWindowActivated;

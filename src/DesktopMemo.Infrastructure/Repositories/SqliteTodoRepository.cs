@@ -13,7 +13,7 @@ namespace DesktopMemo.Infrastructure.Repositories;
 
 /// <summary>
 /// 基于 SQLite 的待办事项存储实现。
-/// 为未来云同步功能预留扩展。
+/// 采用软删除与同步状态字段，为未来云同步功能预留扩展空间。
 /// </summary>
 public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
 {
@@ -64,6 +64,9 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// 读取全部未删除待办项，并按用户期望的展示顺序返回。
+    /// </summary>
     public async Task<IReadOnlyList<TodoItem>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -86,6 +89,9 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
         }
     }
 
+    /// <summary>
+    /// 根据主键读取单条待办项；已软删除的数据不会返回。
+    /// </summary>
     public async Task<TodoItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -105,6 +111,9 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
         }
     }
 
+    /// <summary>
+    /// 新增待办项。
+    /// </summary>
     public async Task AddAsync(TodoItem todoItem, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -132,6 +141,9 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
         }
     }
 
+    /// <summary>
+    /// 更新待办项的正文、完成状态、排序和同步状态。
+    /// </summary>
     public async Task UpdateAsync(TodoItem todoItem, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -164,6 +176,9 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
         }
     }
 
+    /// <summary>
+    /// 软删除待办项，保留记录以便未来同步系统感知删除事件。
+    /// </summary>
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -258,6 +273,7 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
 
         public TodoItem ToModel()
         {
+            // 数据库层使用字符串保存时间，转换时对旧格式或异常值做容错。
             static DateTimeOffset ParseRequired(string value)
             {
                 if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
@@ -296,6 +312,7 @@ public sealed class SqliteTodoRepository : ITodoRepository, IDisposable
 
         public static TodoItemDto FromModel(TodoItem item)
         {
+            // 统一在 DTO 层处理布尔和时间的数据库表示，避免仓储方法重复拼装。
             return new TodoItemDto
             {
                 Id = item.Id.ToString(),

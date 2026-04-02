@@ -75,7 +75,7 @@ DesktopMemo 是一个基于 .NET 9.0 + WPF + CommunityToolkit.Mvvm 的桌面便�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/SaltedDoubao/DesktopMemo.git
+git clone https://github.com/SaltedCollection/DesktopMemo.git
 cd DesktopMemo
 ```
 
@@ -177,13 +177,13 @@ DesktopMemo_rebuild/
 
 ## 🤝 贡献者
 
-<a href="https://github.com/SaltedDoubao/DesktopMemo/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=SaltedDoubao/DesktopMemo" />
+<a href="https://github.com/SaltedCollection/DesktopMemo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=SaltedCollection/DesktopMemo" />
 </a>
 
 ## 🌟 星标历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SaltedDoubao/DesktopMemo&type=Date)](https://star-history.com/#SaltedDoubao/DesktopMemo&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=SaltedCollection/DesktopMemo&type=Date)](https://star-history.com/#SaltedCollection/DesktopMemo&Date)
 
 <div align="center">
 

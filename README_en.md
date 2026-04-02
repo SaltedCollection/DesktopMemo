@@ -75,7 +75,7 @@ If you need to debug the project or participate in development, you can follow t
 
 ```bash
 # Clone repository
-git clone https://github.com/SaltedDoubao/DesktopMemo.git
+git clone https://github.com/SaltedCollection/DesktopMemo.git
 cd DesktopMemo
 ```
 
@@ -177,13 +177,13 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 🤝 Contributors
 
-<a href="https://github.com/SaltedDoubao/DesktopMemo/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=SaltedDoubao/DesktopMemo" />
+<a href="https://github.com/SaltedCollection/DesktopMemo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=SaltedCollection/DesktopMemo" />
 </a>
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SaltedDoubao/DesktopMemo&type=Date)](https://star-history.com/#SaltedDoubao/DesktopMemo&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=SaltedCollection/DesktopMemo&type=Date)](https://star-history.com/#SaltedCollection/DesktopMemo&Date)
 
 <div align="center">
 

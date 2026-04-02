@@ -17,6 +17,10 @@ using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 
 namespace DesktopMemo.App;
 
+/// <summary>
+/// 主窗口代码隐藏层。
+/// 负责承接 WPF 事件、协调 View 与 ViewModel 之间的瞬时交互，以及处理窗口级生命周期。
+/// </summary>
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
@@ -24,8 +28,8 @@ public partial class MainWindow : Window
     private readonly ITrayService _trayService;
     private readonly ILogService _logService;
     private bool _isClosing = false;
-    private SettingsWindow? _settingsWindow; // 单例字段
-    private bool _isOpeningSettings = false; // 防止并发打开设置窗口
+    private SettingsWindow? _settingsWindow; // 维持设置窗口单实例，避免重复打开造成状态分裂。
+    private bool _isOpeningSettings = false; // 防止短时间内重复点击触发并发打开。
 
     public MainWindow(MainViewModel viewModel, IWindowService windowService, ITrayService trayService, ILogService logService)
     {
@@ -61,16 +65,22 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 配置窗口首次加载时的层级与动画行为。
+    /// </summary>
     private void ConfigureWindow()
     {
         Loaded += (s, e) =>
         {
-            // 按当前用户选择的置顶模式应用，而非强制 Desktop
+            // 按用户恢复的模式应用窗口层级，而不是写死默认值。
             _windowService.SetTopmostMode(_viewModel.SelectedTopmostMode);
             _windowService.PlayFadeInAnimation();
         };
     }
 
+    /// <summary>
+    /// 把托盘菜单事件映射到 ViewModel 命令或窗口行为。
+    /// </summary>
     private void ConfigureTrayService()
     {
         _trayService.TrayIconDoubleClick += (s, e) => _windowService.ToggleWindowVisibility();
@@ -115,6 +125,9 @@ public partial class MainWindow : Window
         OpenSettingsWindow();
     }
 
+    /// <summary>
+    /// 打开或激活设置窗口，确保整个应用只有一个设置窗口实例。
+    /// </summary>
     private void OpenSettingsWindow()
     {
         if (!Dispatcher.CheckAccess())
@@ -123,7 +136,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 防止并发打开
+        // 用户连续点击托盘或按钮时，这个保护可以避免创建出多个实例。
         if (_isOpeningSettings)
         {
             _logService.Debug("Settings", "设置窗口正在打开中，忽略重复请求");
@@ -136,13 +149,12 @@ public partial class MainWindow : Window
             _logService.Info("Settings", "请求打开设置窗口");
             _viewModel.IsSettingsPanelVisible = false;
 
-            // 检查现有窗口是否可用
+            // 如果旧窗口还活着，就直接激活它，而不是新建。
             if (_settingsWindow != null)
             {
                 try
                 {
-                    // 关键改进：检查 IsVisible 而非 IsLoaded
-                    // IsVisible 在窗口关闭时会立即变为 false
+                    // 这里看 IsVisible 而不是 IsLoaded，因为窗口关闭过程中后者可能仍为 true。
                     if (_settingsWindow.IsVisible && _settingsWindow.WindowState != WindowState.Minimized)
                     {
                         _logService.Debug("Settings", "激活现有设置窗口");
@@ -162,7 +174,7 @@ public partial class MainWindow : Window
                     }
                     else
                     {
-                        // 窗口不可见，说明正在关闭或已关闭
+                        // 不可见说明窗口已经进入关闭流程，直接丢弃引用创建新实例。
                         _logService.Debug("Settings", "现有窗口不可见，将创建新实例");
                         _settingsWindow = null;
                     }
@@ -174,11 +186,11 @@ public partial class MainWindow : Window
                 }
             }
 
-            // 创建新窗口
+            // 仅在无法复用旧窗口时才创建新实例。
             _logService.Info("Settings", "创建新的设置窗口");
             var newWindow = new SettingsWindow(_viewModel);
 
-            // 关键改进：在 Closing 事件中立即清空引用
+            // 在 Closing 阶段就释放引用，避免窗口尚未 Closed 时阻塞下一次打开。
             newWindow.Closing += (s, e) =>
             {
                 _logService.Debug("Settings", "设置窗口开始关闭，立即清空引用");
@@ -188,7 +200,7 @@ public partial class MainWindow : Window
                 }
             };
 
-            // 保留 Closed 事件用于日志记录
+            // Closed 事件仅保留日志，用于区分“开始关闭”和“完全关闭”。
             newWindow.Closed += (s, e) =>
             {
                 _logService.Debug("Settings", "设置窗口已完全关闭");
@@ -209,7 +221,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            // 延迟重置标志，防止过快的连续点击
+            // 延后一拍重置标志，减少极短时间内重入。
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 _isOpeningSettings = false;
@@ -217,6 +229,9 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 把主窗口的关键状态同步给设置窗口。
+    /// </summary>
     private void ApplySettingsWindowState(SettingsWindow settingsWindow)
     {
         settingsWindow.Topmost = _viewModel.SelectedTopmostMode == TopmostMode.Always;
@@ -239,6 +254,9 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 控制右侧快捷设置面板的显隐与动画。
+    /// </summary>
     private void ApplyQuickSettingsVisibility(bool show)
     {
         if (show)
@@ -252,6 +270,9 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 通过平移动画切换快捷设置面板，保持面板进出的一致手感。
+    /// </summary>
     private void AnimateQuickSettingsPanel(bool show)
     {
         if (QuickSettingsPanel.RenderTransform is not System.Windows.Media.TranslateTransform transform)
@@ -284,11 +305,11 @@ public partial class MainWindow : Window
         Loaded -= OnLoaded;
         try
         {
-            // 配置已在 App.OnStartup 中加载，这里只需要应用UI状态
+            // 设置与数据已在 App 启动阶段恢复，这里只负责把状态映射到视觉层。
             ApplyQuickSettingsVisibility(_viewModel.IsSettingsPanelVisible);
             ApplyWindowSize(_viewModel.WindowSettings);
             
-            // 应用初始主题
+            // 首次加载时主动套一次主题，避免资源字典停留在默认态。
             ApplyTheme(_viewModel.SelectedTheme);
         }
         catch (Exception ex)
@@ -297,7 +318,7 @@ public partial class MainWindow : Window
                 "DesktopMemo 初始化错误",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             
-            // 尝试使用默认设置继续运行
+            // 出错时尽量降级运行，避免一次初始化异常直接让应用不可用。
             try
             {
                 ApplyQuickSettingsVisibility(false);
@@ -320,7 +341,7 @@ public partial class MainWindow : Window
     {
         var actualTheme = theme;
 
-        // 如果选择了跟随系统，检测系统主题
+        // “跟随系统”只是运行时策略，真正加载的仍然是 Light/Dark 资源字典。
         if (theme == AppTheme.System)
         {
             actualTheme = IsSystemDarkMode() ? AppTheme.Dark : AppTheme.Light;
@@ -328,7 +349,7 @@ public partial class MainWindow : Window
 
         try
         {
-            // 构建主题资源 URI
+            // 主题资源字典按文件切换，避免在单个大字典里维护过多条件分支。
             var themeFileName = actualTheme == AppTheme.Dark
                 ? "Dark.xaml"
                 : "Light.xaml";
@@ -337,14 +358,14 @@ public partial class MainWindow : Window
                 $"Resources/Themes/{themeFileName}",
                 UriKind.Relative);
 
-            // 先创建并加载新的资源字典
+            // 先插入新字典再移除旧字典，可减少切换瞬间资源缺失导致的闪烁。
             var newThemeDict = new ResourceDictionary { Source = themeUri };
 
-            // 找到旧的主题字典
+            // 只替换 Themes 目录下的那一本主题字典，其他资源保持不动。
             var oldThemeDict = System.Windows.Application.Current.Resources.MergedDictionaries
                 .FirstOrDefault(d => d.Source != null && d.Source.OriginalString.Contains("Themes/"));
 
-            // 原子性替换：先插入新字典，再移除旧字典
+            // 原子性替换：先插入新字典，再移除旧字典。
             System.Windows.Application.Current.Resources.MergedDictionaries.Insert(0, newThemeDict);
 
             if (oldThemeDict != null)
@@ -357,11 +378,11 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _logService?.Error("Theme", "主题切换失败", ex);
-            // 主题切换失败不影响应用程序继续运行
+            // 主题只是表现层能力，失败时不能影响主功能。
             return;
         }
 
-        // 更新滑块样式
+        // 主题切换后，部分控件样式需要重新按键名取一次资源。
         try
         {
             if (BackgroundOpacitySlider != null)
@@ -407,7 +428,7 @@ public partial class MainWindow : Window
 
     private void OnLocationChanged(object? sender, EventArgs e)
     {
-        // 实时更新位置显示
+        // 位置变更用于更新设置面板上的只读坐标展示。
         _viewModel.UpdateCurrentPosition();
     }
 
@@ -465,7 +486,7 @@ public partial class MainWindow : Window
 
     private async void CloseButton_Click(object sender, RoutedEventArgs e)
     {
-        // 防止并发调用
+        // 关闭按钮可能被多次点击，这里做串行保护。
         if (_isClosing)
         {
             return;
@@ -478,10 +499,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            // 记录异常到日志服务
+            // 关闭流程里牵涉对话框、托盘和持久化，异常需要尽量完整记录。
             _logService.Error("MainWindow", $"处理关闭按钮异常: {ex.Message}", ex);
 
-            // 如果异步处理失败，回退到UI线程执行默认关闭行为
+            // 主关闭流程失败后，回退到尽可能简单的默认行为。
             try
             {
                 if (_viewModel.WindowSettings.DefaultExitToTray)
@@ -496,7 +517,7 @@ public partial class MainWindow : Window
             catch (Exception fallbackEx)
             {
                 _logService.Error("MainWindow", $"回退关闭失败: {fallbackEx.Message}", fallbackEx);
-                // 最后的安全措施
+                // 最后的兜底，避免进程卡在半关闭状态。
                 Environment.Exit(0);
             }
         }
@@ -508,7 +529,7 @@ public partial class MainWindow : Window
 
     private async Task HandleCloseButtonClickAsync()
     {
-        // 首先检查是否有未保存的编辑
+        // 关闭流程优先处理未保存内容，其次再处理“退出还是最小化到托盘”。
         if (_viewModel.IsEditMode && _viewModel.IsContentModified)
         {
             Views.UnsavedChangesDialog? unsavedDialog = null;
@@ -533,7 +554,7 @@ public partial class MainWindow : Window
 
             if (unsavedResult != true || unsavedDialog == null)
             {
-                // 对话框创建失败或关闭，取消关闭操作
+                // 对话框失败时宁可取消关闭，也不要冒险丢失用户编辑内容。
                 return;
             }
 
@@ -545,7 +566,7 @@ public partial class MainWindow : Window
                 case Views.UnsavedChangesAction.Cancel:
                     return; // 取消关闭
                 case Views.UnsavedChangesAction.Discard:
-                    // 恢复编辑内容，防止后续操作保存修改
+                    // 丢弃修改时把编辑器恢复到已保存版本，避免后续流程误保存脏内容。
                     _viewModel.EditorContent = _viewModel.SelectedMemo?.Content ?? string.Empty;
                     break; // 继续关闭流程
             }
@@ -557,7 +578,7 @@ public partial class MainWindow : Window
             Views.ExitConfirmationDialog? dialog = null;
             bool? result = null;
 
-            // 在UI线程上创建和显示对话框
+            // 退出确认框需要在 UI 线程创建，确保 Owner 与模态行为正常。
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 try
@@ -582,10 +603,10 @@ public partial class MainWindow : Window
 
             if (result != true || dialog == null)
             {
-                // 用户取消或对话框创建失败
+                // 用户取消时直接中止；若对话框失败，则回退到默认关闭策略。
                 if (result == null)
                 {
-                    // 对话框创建失败，使用默认行为
+                    // 对话框异常时，仍按已保存偏好执行默认动作。
                     await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                     {
                         if (_viewModel.WindowSettings.DefaultExitToTray)
@@ -601,10 +622,9 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // 如果用户选择了"不再显示"，立即更新内存中的设置，然后异步保存
+            // “不再显示”要先更新内存，防止后续其他设置保存把这次选择覆盖掉。
             if (dialog.DontShowAgain)
             {
-                // 立即更新内存中的设置，避免被后续的设置保存覆盖
                 bool exitToTray = dialog.Action == Views.ExitAction.MinimizeToTray;
                 var newSettings = _viewModel.WindowSettings with
                 {
@@ -613,7 +633,7 @@ public partial class MainWindow : Window
                 };
                 _viewModel.WindowSettings = newSettings;
 
-                // 异步保存到磁盘（不等待，避免阻塞退出操作）
+                // 退出动作优先，不等待设置保存完成。
                 _ = Task.Run(async () =>
                 {
                     try
@@ -624,12 +644,12 @@ public partial class MainWindow : Window
                     catch (Exception ex)
                     {
                         System.Diagnostics.Debug.WriteLine($"保存退出设置失败: {ex}");
-                        // 设置保存失败不影响退出操作
+                        // 设置保存失败不影响退出动作本身。
                     }
                 });
             }
 
-            // 在UI线程执行退出操作
+            // 最终的窗口隐藏或进程退出必须回到 UI 线程执行。
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 switch (dialog.Action)
@@ -651,7 +671,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            // 不显示确认，根据保存的设置执行默认行为
+            // 已关闭确认框时，直接走持久化的默认退出策略。
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (_viewModel.WindowSettings.DefaultExitToTray)
@@ -674,8 +694,7 @@ public partial class MainWindow : Window
 
     private void NoteTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
-        // 仅标记编辑状态，不触发自动保存
-        // 用户需要手动保存（Ctrl+S 或点击保存按钮）
+        // 编辑器变更只更新“脏状态”，项目当前仍坚持显式保存。
         _viewModel.MarkEditing();
     }
 
@@ -762,13 +781,13 @@ public partial class MainWindow : Window
 
     private void ShowFindDialog()
     {
-        // 实现查找对话框或内联查找功能
+        // 当前先给出状态提示，后续可替换为真正的查找面板。
         _viewModel.SetStatus("查找功能 - 使用 F3 查找下一个");
     }
 
     private void ShowReplaceDialog()
     {
-        // 实现替换对话框或内联替换功能
+        // 当前先给出状态提示，后续可替换为真正的替换面板。
         _viewModel.SetStatus("替换功能 - 使用 Ctrl+H 替换");
     }
 
@@ -812,7 +831,7 @@ public partial class MainWindow : Window
         var caretIndex = textBox.CaretIndex;
         var text = textBox.Text;
 
-        // 找到当前行的开始和结束
+        // 基于换行符定位当前逻辑行，然后把整行文本复制到下一行。
         var lineStart = text.LastIndexOf('\n', Math.Max(0, caretIndex - 1)) + 1;
         var lineEnd = text.IndexOf('\n', caretIndex);
         if (lineEnd == -1) lineEnd = text.Length;
@@ -842,7 +861,7 @@ public partial class MainWindow : Window
         var caretIndex = textBox.CaretIndex;
         var text = textBox.Text;
 
-        // 找到当前行开始
+        // 对整行统一增加 4 空格缩进，符合 Markdown 常见缩进约定。
         var lineStart = text.LastIndexOf('\n', Math.Max(0, caretIndex - 1)) + 1;
         textBox.Text = text.Insert(lineStart, "    ");
         textBox.CaretIndex = caretIndex + 4;
@@ -856,10 +875,10 @@ public partial class MainWindow : Window
         var caretIndex = textBox.CaretIndex;
         var text = textBox.Text;
 
-        // 找到当前行开始
+        // 仅处理当前行开头的缩进，不试图做复杂的多行反缩进。
         var lineStart = text.LastIndexOf('\n', Math.Max(0, caretIndex - 1)) + 1;
 
-        // 检查是否有缩进可以删除
+        // 优先删除一个标准缩进宽度，其次退化为删除单个空格。
         if (lineStart < text.Length && text.Substring(lineStart, Math.Min(4, text.Length - lineStart)) == "    ")
         {
             textBox.Text = text.Remove(lineStart, 4);
@@ -894,7 +913,7 @@ public partial class MainWindow : Window
     {
         if (MainContainer != null)
         {
-            // 创建新的背景画刷
+            // 当前窗口背景透明度通过重新生成画刷来表达。
             var backgroundColor = System.Windows.Media.Color.FromArgb(
                 (byte)(255 * opacity), // Alpha通道
                 255, 255, 255); // RGB白色
@@ -922,7 +941,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void EditTodoTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
-        // 延迟执行以避免与保存命令冲突
+        // 延迟到后台优先级，避免与回车保存或点击保存按钮互相抢焦点。
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_viewModel?.TodoListViewModel?.EditingTodoId != null)
@@ -965,7 +984,7 @@ public partial class MainWindow : Window
         if (!_viewModel.TodoListViewModel.IsInputVisible)
             return;
 
-        // 检查点击位置是否在输入区域外
+        // 点击区域不在输入框容器内时，视为用户结束了本次临时输入。
         if (TodoInputBorder != null && !TodoInputBorder.IsMouseOver)
         {
             _viewModel.TodoListViewModel.OnInputLostFocus();

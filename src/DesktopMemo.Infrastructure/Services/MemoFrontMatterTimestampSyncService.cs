@@ -10,6 +10,10 @@ using Microsoft.Data.Sqlite;
 
 namespace DesktopMemo.Infrastructure.Services;
 
+/// <summary>
+/// 启动阶段用于校准 SQLite 时间索引与 Markdown front matter 时间字段的一致性。
+/// 该同步只回写数据库，不改动 Markdown 文件本身。
+/// </summary>
 public sealed class MemoFrontMatterTimestampSyncService
 {
     private readonly string _dbPath;
@@ -25,6 +29,9 @@ public sealed class MemoFrontMatterTimestampSyncService
         _logService = logService;
     }
 
+    /// <summary>
+    /// 扫描全部未删除备忘录，并把 Markdown 中的 createdAt / updatedAt 同步回数据库。
+    /// </summary>
     public async Task<MemoFrontMatterTimestampSyncResult> SyncAsync(CancellationToken cancellationToken = default)
     {
         if (!File.Exists(_dbPath))
@@ -63,6 +70,7 @@ public sealed class MemoFrontMatterTimestampSyncService
 
             try
             {
+                // 旧版本可能残留错误 file_path，这里会尝试标准路径回退并修复数据库记录。
                 var filePath = await ResolveFilePathAsync(connection, row, memoId).ConfigureAwait(false);
                 if (filePath is null)
                 {
@@ -74,6 +82,7 @@ public sealed class MemoFrontMatterTimestampSyncService
                 var yaml = await MemoMarkdownDocumentReader.ReadFrontMatterAsync(filePath, cancellationToken).ConfigureAwait(false);
                 var frontMatter = MemoMarkdownFrontMatterParser.Parse(yaml);
 
+                // front matter 中若显式声明了不同的 ID，说明文件与索引可能错配，不能盲目回写。
                 if (frontMatter.Id is Guid frontMatterId && frontMatterId != memoId)
                 {
                     skippedCount++;
@@ -96,6 +105,7 @@ public sealed class MemoFrontMatterTimestampSyncService
 
                 if (dbCreatedAt == markdownCreatedAt && dbUpdatedAt == markdownUpdatedAt)
                 {
+                    // 时间一致时不做额外写入，减少数据库压力。
                     continue;
                 }
 
@@ -157,6 +167,7 @@ public sealed class MemoFrontMatterTimestampSyncService
 
         if (!string.Equals(row.FilePath, fallbackPath, StringComparison.OrdinalIgnoreCase))
         {
+            // 这里顺带自愈旧路径，避免后续每次启动都重复走回退逻辑。
             const string updatePathSql = @"
                 UPDATE memos
                 SET file_path = @FilePath
@@ -191,6 +202,9 @@ public sealed class MemoFrontMatterTimestampSyncService
     }
 }
 
+/// <summary>
+/// front matter 时间同步结果摘要，用于日志与测试断言。
+/// </summary>
 public sealed record MemoFrontMatterTimestampSyncResult(
     int ScannedCount,
     int UpdatedCount,

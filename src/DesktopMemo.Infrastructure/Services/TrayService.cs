@@ -8,6 +8,10 @@ using Forms = System.Windows.Forms;
 
 namespace DesktopMemo.Infrastructure.Services;
 
+/// <summary>
+/// 系统托盘服务。
+/// 负责创建 NotifyIcon、构建右键菜单，并把菜单动作转发为上层事件。
+/// </summary>
 public sealed class TrayService : ITrayService
 {
     private Forms.NotifyIcon? _notifyIcon;
@@ -65,6 +69,9 @@ public sealed class TrayService : ITrayService
 
     public bool IsClickThroughEnabled { get; private set; }
 
+    /// <summary>
+    /// 初始化托盘图标与上下文菜单。
+    /// </summary>
     public void Initialize()
     {
         if (_notifyIcon != null)
@@ -77,7 +84,7 @@ public sealed class TrayService : ITrayService
             _notifyIcon = new Forms.NotifyIcon
             {
                 Text = "DesktopMemo 便签 - 桌面便签工具",
-                Visible = false // 先设为false，避免在未完全初始化时显示
+                Visible = false // 初始化未完成前不显示，避免半成品菜单暴露给用户。
             };
 
             SetTrayIcon();
@@ -87,7 +94,7 @@ public sealed class TrayService : ITrayService
         }
         catch (Exception)
         {
-            // 如果托盘图标初始化失败，创建一个最简单的版本
+            // 如果完整初始化失败，退回到最小可用的系统默认图标版本。
             try
             {
                 _notifyIcon = new Forms.NotifyIcon
@@ -100,7 +107,7 @@ public sealed class TrayService : ITrayService
             }
             catch
             {
-                // 如果连简单版本都失败，则忽略托盘功能
+                // 如果连最小版本都失败，则整个托盘功能降级为不可用。
                 _notifyIcon = null;
             }
         }
@@ -149,6 +156,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 同步托盘菜单中置顶模式的勾选状态。
+    /// </summary>
     public void UpdateTopmostState(TopmostMode mode)
     {
         try
@@ -163,6 +173,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 把托盘菜单中的置顶模式选择转发给外层。
+    /// </summary>
     private void OnTopmostModeChanged(TopmostMode mode)
     {
         try
@@ -175,6 +188,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 同步穿透模式的勾选状态。
+    /// </summary>
     public void UpdateClickThroughState(bool enabled)
     {
         try
@@ -220,6 +236,9 @@ public sealed class TrayService : ITrayService
         Dispose();
     }
 
+    /// <summary>
+    /// 为托盘选择图标，优先复用缓存，避免重复从可执行文件提取。
+    /// </summary>
     private void SetTrayIcon()
     {
         if (_notifyIcon == null)
@@ -231,6 +250,7 @@ public sealed class TrayService : ITrayService
         {
             if (_cachedTrayIcon != null)
             {
+                // 托盘图标通常在整个进程生命周期内固定，缓存可减少 GDI 资源重复分配。
                 _notifyIcon.Icon = _cachedTrayIcon;
                 return;
             }
@@ -268,6 +288,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 构建深色风格托盘菜单，并为每个菜单项绑定对应事件。
+    /// </summary>
     private void BuildContextMenu()
     {
         if (_notifyIcon == null)
@@ -286,6 +309,7 @@ public sealed class TrayService : ITrayService
             ForeColor = Color.FromArgb(241, 241, 241)
         };
 
+        // WinForms 托盘菜单默认双缓冲能力有限，这里通过反射减少展开时闪烁。
         typeof(Forms.ToolStripDropDownMenu).InvokeMember("DoubleBuffered",
             System.Reflection.BindingFlags.SetProperty | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
             null, _contextMenu, new object[] { true });
@@ -311,7 +335,7 @@ public sealed class TrayService : ITrayService
         _topmostDesktopItem = new Forms.ToolStripMenuItem("桌面置顶") { Font = _regularFont };
         _topmostAlwaysItem = new Forms.ToolStripMenuItem("总是置顶") { Font = _regularFont };
         
-        // 添加事件处理，避免在点击时调用UpdateTopmostState（那个是用来更新UI状态的）
+        // 这里触发的是“用户操作事件”，而不是单纯刷新 UI 勾选状态。
         _topmostNormalItem.Click += (s, e) => OnTopmostModeChanged(TopmostMode.Normal);
         _topmostDesktopItem.Click += (s, e) => OnTopmostModeChanged(TopmostMode.Desktop);
         _topmostAlwaysItem.Click += (s, e) => OnTopmostModeChanged(TopmostMode.Always);
@@ -414,6 +438,9 @@ public sealed class TrayService : ITrayService
         });
     }
 
+    /// <summary>
+    /// 根据当前语言刷新全部托盘菜单文本。
+    /// </summary>
     public void UpdateMenuTexts(Func<string, string> getLocalizedString)
     {
         try
@@ -453,6 +480,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 自定义深色托盘菜单渲染器，使托盘菜单与应用主题风格更接近。
+    /// </summary>
     private sealed class DarkTrayMenuRenderer : Forms.ToolStripProfessionalRenderer
     {
         public DarkTrayMenuRenderer() : base(new DarkColorTable())
@@ -531,6 +561,9 @@ public sealed class TrayService : ITrayService
         }
     }
 
+    /// <summary>
+    /// 深色托盘菜单配色表。
+    /// </summary>
     private sealed class DarkColorTable : Forms.ProfessionalColorTable
     {
         public override Color MenuItemSelected => Color.FromArgb(62, 62, 66);
@@ -538,6 +571,9 @@ public sealed class TrayService : ITrayService
         public override Color ToolStripDropDownBackground => Color.FromArgb(45, 45, 48);
     }
 
+    /// <summary>
+    /// 创建托盘菜单字体；若目标字体不可用，则退回系统通用无衬线字体。
+    /// </summary>
     private static Font CreateFont(string family, float size, FontStyle style)
     {
         try

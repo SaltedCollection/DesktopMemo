@@ -49,7 +49,7 @@ git clone https://github.com/yourname/DesktopMemo.git
 cd DesktopMemo
 
 # 3. 添加上游仓库
-git remote add upstream https://github.com/SaltedDoubao/DesktopMemo.git
+git remote add upstream https://github.com/SaltedCollection/DesktopMemo.git
 ```
 
 ### 构建项目
@@ -649,8 +649,8 @@ A:
 
 感谢所有为 DesktopMemo 做出贡献的开发者！
 
-<a href="https://github.com/SaltedDoubao/DesktopMemo/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=SaltedDoubao/DesktopMemo" />
+<a href="https://github.com/SaltedCollection/DesktopMemo/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=SaltedCollection/DesktopMemo" />
 </a>
 
 ---

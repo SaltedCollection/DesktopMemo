@@ -12,7 +12,8 @@ using System.Diagnostics;
 namespace DesktopMemo.Infrastructure.Services;
 
 /// <summary>
-/// 使用 JSON 文件存储窗口设置。
+/// 使用 JSON 文件存储窗口与全局设置。
+/// 读取时尽量容错，保存时尽量规范化，避免设置文件损坏影响主流程。
 /// </summary>
 public sealed class JsonSettingsService : ISettingsService
 {
@@ -30,6 +31,9 @@ public sealed class JsonSettingsService : ISettingsService
         _settingsFile = Path.Combine(dataDirectory, "settings.json");
     }
 
+    /// <summary>
+    /// 从 `settings.json` 读取设置；若文件缺失或损坏，则安全回退到默认值。
+    /// </summary>
     public async Task<WindowSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         if (!File.Exists(_settingsFile))
@@ -54,7 +58,7 @@ public sealed class JsonSettingsService : ISettingsService
                 return WindowSettings.Default;
             }
 
-            // 验证和修复透明度值
+            // 设置文件可能来自旧版本或手工编辑，这里做一次容错规范化。
             var normalizedTransparency = TransparencyHelper.NormalizeTransparency(settings.Transparency);
             if (Math.Abs(settings.Transparency - normalizedTransparency) > 0.001)
             {
@@ -68,7 +72,7 @@ public sealed class JsonSettingsService : ISettingsService
         catch (JsonException ex)
         {
             Debug.WriteLine($"设置文件JSON格式错误: {ex.Message}，使用默认设置");
-            // 备份损坏的设置文件
+            // JSON 损坏时保留现场，方便用户回滚或开发者排查。
             try
             {
                 File.Copy(_settingsFile, _settingsFile + ".backup", true);
@@ -84,11 +88,14 @@ public sealed class JsonSettingsService : ISettingsService
         }
     }
 
+    /// <summary>
+    /// 把设置序列化到磁盘。
+    /// </summary>
     public async Task SaveAsync(WindowSettings settings, CancellationToken cancellationToken = default)
     {
         try
         {
-            // 在保存前验证设置
+            // 保存前统一做一次规范化，避免无效透明度持续在文件中传播。
             var normalizedTransparency = TransparencyHelper.NormalizeTransparency(settings.Transparency);
             if (Math.Abs(settings.Transparency - normalizedTransparency) > 0.001)
             {
@@ -106,7 +113,7 @@ public sealed class JsonSettingsService : ISettingsService
         catch (Exception ex)
         {
             Debug.WriteLine($"保存设置文件失败: {ex.Message}");
-            throw; // 重新抛出异常，让调用者知道保存失败
+            throw; // 保持失败可见，让上层决定是否提示用户或重试。
         }
     }
 }

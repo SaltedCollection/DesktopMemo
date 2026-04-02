@@ -6,14 +6,15 @@ using DesktopMemo.Core.Contracts;
 namespace DesktopMemo.App.Localization;
 
 /// <summary>
-/// 本地化服务实现，支持运行时动态切换语言
+/// 本地化服务实现，支持运行时动态切换语言。
+/// 通过索引器暴露资源字符串，便于 XAML 和 ViewModel 统一访问。
 /// </summary>
 public class LocalizationService : ILocalizationService, INotifyPropertyChanged
 {
     private readonly ResourceManager _resourceManager;
     private CultureInfo _currentCulture;
     
-    // 支持的语言列表
+    // 支持的语言列表固定在客户端内，避免用户选择到没有资源文件的文化。
     private static readonly CultureInfo[] SupportedCultures = new[]
     {
         new CultureInfo("zh-CN"), // 简体中文
@@ -25,13 +26,13 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
 
     public LocalizationService()
     {
-        // 初始化资源管理器，指向 Strings 资源文件
+        // ResourceManager 统一管理多语言 resx 资源。
         _resourceManager = new ResourceManager(
             "DesktopMemo.App.Localization.Resources.Strings",
             typeof(LocalizationService).Assembly
         );
         
-        // 默认使用简体中文
+        // 默认文化与项目主要受众一致，首次启动无需依赖设置文件。
         _currentCulture = new CultureInfo("zh-CN");
     }
 
@@ -46,7 +47,7 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
             {
                 var value = _resourceManager.GetString(key, _currentCulture);
                 
-                // 如果找不到资源，返回键名作为后备
+                // 用 [key] 作为兜底，能让缺失翻译在 UI 中一眼暴露。
                 return value ?? $"[{key}]";
             }
             catch
@@ -56,7 +57,7 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
         }
         set
         {
-            // Ignore accidental TwoWay bindings targeting localization resources.
+            // 忽略误绑定到 TwoWay 的写入请求；本地化资源只读。
         }
     }
 
@@ -73,17 +74,17 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
                 var oldCulture = _currentCulture;
                 _currentCulture = value;
                 
-                // 更新线程的 UI 文化
+                // 同步线程文化，确保日期、数字和资源查找都切到新语言。
                 Thread.CurrentThread.CurrentUICulture = value;
                 Thread.CurrentThread.CurrentCulture = value;
                 
-                // 触发属性变更通知
+                // 绑定到 CurrentCulture 的下拉框等控件需要收到属性变更。
                 OnPropertyChanged(nameof(CurrentCulture));
                 
-                // 通知所有资源键的值可能已改变
+                // 索引器绑定使用 Item[] 通知，让所有本地化文本整体刷新。
                 OnPropertyChanged("Item[]");
                 
-                // 触发语言切换事件
+                // 额外抛事件给需要做二次处理的组件，例如托盘菜单或组合文案。
                 LanguageChanged?.Invoke(this, new LanguageChangedEventArgs(value, oldCulture));
             }
         }
@@ -98,7 +99,7 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
         {
             var newCulture = new CultureInfo(cultureName);
             
-            // 验证是否为支持的语言
+            // 只允许切换到显式支持的文化，避免资源缺失造成半翻译状态。
             if (!SupportedCultures.Any(c => c.Name == newCulture.Name))
             {
                 throw new CultureNotFoundException(
@@ -111,7 +112,7 @@ public class LocalizationService : ILocalizationService, INotifyPropertyChanged
         }
         catch (CultureNotFoundException)
         {
-            // 如果文化名称无效，回退到默认中文
+            // 非法文化或不支持的语言都回退到默认中文。
             CurrentCulture = new CultureInfo("zh-CN");
         }
     }

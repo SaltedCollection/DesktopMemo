@@ -12,6 +12,10 @@ using WpfApp = System.Windows.Application;
 
 namespace DesktopMemo.App;
 
+/// <summary>
+/// WPF 应用程序入口。
+/// 负责搭建依赖注入容器、执行启动迁移并创建主窗口。
+/// </summary>
 public partial class App : WpfApp
 {
     public IServiceProvider Services { get; }
@@ -21,6 +25,9 @@ public partial class App : WpfApp
         Services = ConfigureServices();
     }
 
+    /// <summary>
+    /// 注册应用运行所需的服务、仓储与 ViewModel。
+    /// </summary>
     private IServiceProvider ConfigureServices()
     {
         var appDirectory = AppContext.BaseDirectory;
@@ -28,7 +35,7 @@ public partial class App : WpfApp
 
         var services = new ServiceCollection();
 
-        // 核心服务
+        // 核心服务负责日志、数据持久化、检索与兼容旧版本数据。
         services.AddSingleton<ILogService>(_ => new FileLogService(dataDirectory));
         services.AddSingleton<IMemoRepository>(_ => new SqliteIndexedMemoRepository(dataDirectory));
         services.AddSingleton<ITodoRepository>(_ => new SqliteTodoRepository(dataDirectory));
@@ -36,21 +43,21 @@ public partial class App : WpfApp
         services.AddSingleton<IMemoSearchService, MemoSearchService>();
         services.AddSingleton(_ => new MemoMigrationService(dataDirectory, appDirectory));
         
-        // 数据迁移服务
+        // 启动阶段迁移服务按“待办 -> 备忘录索引 -> front matter 时间同步”的顺序执行。
         services.AddSingleton<TodoMigrationService>();
         services.AddSingleton<MemoMetadataMigrationService>();
         services.AddSingleton(_ => new MemoFrontMatterTimestampSyncService(
             dataDirectory,
             _.GetRequiredService<ILogService>()));
 
-        // 窗口和托盘服务
+        // 窗口和托盘服务与具体 UI 生命周期强相关，因此保持单例共享状态。
         services.AddSingleton<IWindowService, WindowService>();
         services.AddSingleton<ITrayService, TrayService>();
 
-        // 本地化服务
+        // 本地化服务在整个会话内共享当前语言状态。
         services.AddSingleton<ILocalizationService, LocalizationService>();
 
-        // ViewModel
+        // 主界面和子面板的 ViewModel 统一交给容器管理，便于跨窗口复用。
         services.AddSingleton<TodoListViewModel>();
         services.AddSingleton<LogViewModel>();
         services.AddSingleton<MainViewModel>();
@@ -64,11 +71,11 @@ public partial class App : WpfApp
 
         try
         {
-            // 执行数据迁移
+            // 启动时优先做数据兼容处理，避免 UI 加载后才发现旧数据结构无法读取。
             var appDirectory = AppContext.BaseDirectory;
             var dataDirectory = Path.Combine(appDirectory, ".memodata");
             
-            // 初始化日志服务
+            // 尽早初始化日志和全局异常处理，保证后续启动失败也能留下诊断信息。
             var logService = Services.GetRequiredService<ILogService>();
             RegisterGlobalExceptionHandlers(logService);
             logService.Info("App", "应用程序启动");
@@ -114,7 +121,7 @@ public partial class App : WpfApp
             System.Diagnostics.Debug.WriteLine("========== 数据迁移检查完成 ==========");
             logService.Info("Migration", "数据迁移检查完成");
 
-            // 加载语言设置
+            // 先恢复语言，再构建窗口，确保首帧 UI 就使用用户上次选择的文化。
             var settingsService = Services.GetRequiredService<ISettingsService>();
             var localizationService = Services.GetRequiredService<ILocalizationService>();
             
@@ -135,7 +142,7 @@ public partial class App : WpfApp
                 ws.Initialize(window);
             }
 
-            // 初始化托盘服务，但不要因为失败而停止应用程序
+            // 托盘是增强能力，不应因为初始化失败而阻止主窗口运行。
             try
             {
                 trayService.Initialize();
@@ -145,7 +152,7 @@ public partial class App : WpfApp
                 // 托盘服务初始化失败，但应用程序仍然可以运行
             }
 
-            // 在显示窗口之前先加载配置（配置中会根据设置决定是否显示托盘）
+            // 先初始化 ViewModel，再显示窗口，避免首帧出现“默认值闪一下”的情况。
             await viewModel.InitializeAsync();
 
             MainWindow = window;
@@ -165,6 +172,9 @@ public partial class App : WpfApp
         }
     }
 
+    /// <summary>
+    /// 注册全局异常处理器，尽量把前台和后台异常都收敛到统一日志中。
+    /// </summary>
     private void RegisterGlobalExceptionHandlers(ILogService logService)
     {
         AppDomain.CurrentDomain.UnhandledException += (s, e) =>
@@ -176,7 +186,7 @@ public partial class App : WpfApp
         DispatcherUnhandledException += (s, e) =>
         {
             logService.Error("App", "UI线程未处理异常", e.Exception);
-            e.Handled = true; // 关键：防止应用崩溃
+            e.Handled = true; // 关键：防止 UI 线程异常直接导致进程退出。
 
             // 显示友好的错误提示
             System.Windows.MessageBox.Show(
@@ -200,7 +210,7 @@ public partial class App : WpfApp
         
         Services.GetService<ITrayService>()?.Dispose();
         
-        // 释放日志服务（等待文件写入完成）
+        // 日志服务最后释放，尽量保证退出前的收尾日志能落盘。
         if (logService is IDisposable disposableLog)
         {
             disposableLog.Dispose();

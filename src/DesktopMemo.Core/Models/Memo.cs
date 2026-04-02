@@ -5,7 +5,8 @@ using System.Linq;
 namespace DesktopMemo.Core.Models;
 
 /// <summary>
-/// 表示一条完整的备忘录数据。
+/// 表示一条完整的备忘录聚合数据。
+/// 该模型同时承担 UI 展示、持久化和未来同步场景中的主实体角色。
 /// </summary>
 public sealed record Memo(
     Guid Id,
@@ -21,7 +22,8 @@ public sealed record Memo(
     DateTimeOffset? DeletedAt = null)
 {
     /// <summary>
-    /// 获取用于显示的标题。如果内容不为空，使用第一行作为标题；否则使用原标题。
+    /// 获取用于显示的标题。
+    /// 当正文首行可读时，优先把首行当作临时标题展示，以降低用户必须维护显式标题的成本。
     /// </summary>
     public string DisplayTitle => GetDisplayTitle();
 
@@ -42,6 +44,9 @@ public sealed record Memo(
 
         return firstLine.Length > 50 ? firstLine.Substring(0, 50) + "..." : firstLine;
     }
+    /// <summary>
+    /// 创建一条全新的本地备忘录，并基于正文生成预览内容。
+    /// </summary>
     public static Memo CreateNew(string title, string content)
     {
         var now = DateTimeOffset.Now;
@@ -58,6 +63,9 @@ public sealed record Memo(
             false);
     }
 
+    /// <summary>
+    /// 更新正文，同时刷新预览、更新时间和同步状态。
+    /// </summary>
     public Memo WithContent(string content, DateTimeOffset timestamp) => this with
     {
         Content = content,
@@ -67,6 +75,9 @@ public sealed record Memo(
         SyncStatus = SyncStatus.PendingSync
     };
 
+    /// <summary>
+    /// 更新标题、标签和置顶状态等元数据。
+    /// </summary>
     public Memo WithMetadata(string title, IReadOnlyList<string> tags, bool isPinned, DateTimeOffset timestamp) => this with
     {
         Title = title,
@@ -94,6 +105,10 @@ public sealed record Memo(
         SyncStatus = SyncStatus.Conflict
     };
 
+    /// <summary>
+    /// 生成用于列表页的短预览。
+    /// 优先保留首行可读性，其次在固定长度内截断，避免列表项被大段正文撑开。
+    /// </summary>
     private static string BuildPreview(string content)
     {
         if (string.IsNullOrWhiteSpace(content))

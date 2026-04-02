@@ -36,7 +36,7 @@ public sealed class MemoMetadataMigrationService
         var memosDb = Path.Combine(dataDirectory, "memos.db");
         var backupFile = Path.Combine(contentDir, $"index_backup_{DateTime.Now:yyyyMMddHHmmss}.json");
 
-        // 如果 SQLite 数据库已存在，进一步检查是否为空库（没有任何 memo 记录）
+        // 若索引库已存在，需要进一步判断它是有效数据还是仅仅一个空壳文件。
         if (File.Exists(memosDb))
         {
             _logger?.LogInformation("✓ 检测到 SQLite 数据库文件存在: {DbPath}", memosDb);
@@ -45,7 +45,7 @@ public sealed class MemoMetadataMigrationService
                 using var connection = new SqliteConnection($"Data Source={memosDb}");
                 connection.Open();
 
-                // 确保表存在
+                // 兼容“数据库文件已创建但表还没建好”的中间状态。
                 var initCmd = connection.CreateCommand();
                 initCmd.CommandText = @"CREATE TABLE IF NOT EXISTS memos (
                     id TEXT PRIMARY KEY,
@@ -75,7 +75,7 @@ public sealed class MemoMetadataMigrationService
                 {
                     _logger?.LogInformation("⚠ 检测到 SQLite 索引存在但为空，将尝试从 index.json 进行迁移");
                     System.Diagnostics.Debug.WriteLine("[迁移检查] SQLite为空，将执行迁移");
-                    // 继续执行迁移逻辑（不 return）
+                    // 空索引允许继续从 index.json 重建。
                 }
             }
             catch (Exception ex)
@@ -84,7 +84,7 @@ public sealed class MemoMetadataMigrationService
             }
         }
 
-        // 如果 content 目录不存在，说明没有数据
+        // 没有 content 目录时，也要创建空索引库，保证新版本后续流程正常。
         if (!Directory.Exists(contentDir))
         {
             _logger?.LogInformation("content 目录不存在，无需迁移");
@@ -100,7 +100,7 @@ public sealed class MemoMetadataMigrationService
             _logger?.LogInformation("⚡ 开始迁移备忘录元数据到 SQLite 索引...");
             System.Diagnostics.Debug.WriteLine("[迁移执行] 开始从 index.json 迁移到 SQLite");
 
-            // 1. 使用旧的 Repository 读取所有备忘录
+            // 1. 先复用旧仓储读取 index.json 和正文文件，避免重复兼容逻辑。
             var oldRepository = new FileMemoRepository(dataDirectory);
             var memos = await oldRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
 
@@ -111,10 +111,10 @@ public sealed class MemoMetadataMigrationService
             {
                 _logger?.LogInformation("没有备忘录需要迁移");
                 
-                // 创建空的 SQLite 数据库
+                // 即使没有数据也创建空库，表示迁移流程已完成。
                 using var emptyRepo = new SqliteIndexedMemoRepository(dataDirectory);
                 
-                // 备份 index.json（如果存在）
+                // 把旧索引文件改名备份，防止下次启动继续触发迁移。
                 if (File.Exists(indexFile))
                 {
                     File.Move(indexFile, backupFile);
@@ -124,7 +124,7 @@ public sealed class MemoMetadataMigrationService
                 return new MigrationResult(true, 0, "没有备忘录需要迁移");
             }
 
-            // 2. 创建 SQLite Repository 并写入数据
+            // 2. 用新仓储重建索引；正文仍留在原 Markdown 文件中。
             System.Diagnostics.Debug.WriteLine($"[迁移执行] 开始写入 {memos.Count} 条备忘录到 SQLite（这会更新文件修改时间）");
             using (var sqliteRepository = new SqliteIndexedMemoRepository(dataDirectory))
             {
@@ -137,7 +137,7 @@ public sealed class MemoMetadataMigrationService
                 System.Diagnostics.Debug.WriteLine($"[迁移执行] ✓ 已写入 {written} 条备忘录");
             }
 
-            // 3. 备份原 index.json 文件
+            // 3. 迁移成功后再备份原 index.json，降低中途失败时的数据风险。
             if (File.Exists(indexFile))
             {
                 File.Move(indexFile, backupFile);

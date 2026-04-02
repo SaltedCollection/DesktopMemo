@@ -12,6 +12,7 @@ namespace DesktopMemo.App.ViewModels;
 
 /// <summary>
 /// 待办事项列表的视图模型。
+/// 负责把仓储中的 Todo 数据拆成“未完成”和“已完成”两个集合，便于界面直接绑定。
 /// </summary>
 public partial class TodoListViewModel : ObservableObject
 {
@@ -33,7 +34,9 @@ public partial class TodoListViewModel : ObservableObject
     [ObservableProperty]
     private bool _isInputVisible = false;
 
-    // 编辑状态
+    /// <summary>
+    /// 当前处于内联编辑状态的待办项 ID；为空表示没有项目正在编辑。
+    /// </summary>
     [ObservableProperty]
     private Guid? _editingTodoId;
 
@@ -73,6 +76,7 @@ public partial class TodoListViewModel : ObservableObject
         IncompleteTodos.Clear();
         CompletedTodos.Clear();
 
+        // 视图层直接维护两个分组集合，避免每次绑定刷新时重复做筛选。
         foreach (var todo in todos)
         {
             if (todo.IsCompleted)
@@ -131,14 +135,14 @@ public partial class TodoListViewModel : ObservableObject
 
         if (updatedTodo.IsCompleted)
         {
-            // 从未完成列表移到已完成列表
+            // 完成项通常需要靠前显示，便于用户确认刚完成的动作。
             IncompleteTodos.Remove(todoItem);
             CompletedTodos.Insert(0, updatedTodo);
             SetStatus("已完成待办事项");
         }
         else
         {
-            // 从已完成列表移回未完成列表
+            // 恢复为未完成时同样插回顶部，避免用户重新查找。
             CompletedTodos.Remove(todoItem);
             IncompleteTodos.Insert(0, updatedTodo);
             SetStatus("已标记为未完成");
@@ -250,7 +254,7 @@ public partial class TodoListViewModel : ObservableObject
     [RelayCommand]
     public void OnInputLostFocus()
     {
-        // 失焦时直接收起输入框并清空内容
+        // 输入区是轻量级临时入口，失焦后直接收起，避免残留半成品内容。
         IsInputVisible = false;
         NewTodoContent = string.Empty;
     }
@@ -282,7 +286,7 @@ public partial class TodoListViewModel : ObservableObject
             return;
         }
 
-        // 查找正在编辑的项
+        // 编辑对象可能位于任一分组，因此需要跨集合查找当前项。
         var todoItem = IncompleteTodos.FirstOrDefault(t => t.Id == EditingTodoId)
                       ?? CompletedTodos.FirstOrDefault(t => t.Id == EditingTodoId);
 
@@ -308,13 +312,13 @@ public partial class TodoListViewModel : ObservableObject
 
     partial void OnIsInputVisibleChanged(bool value)
     {
-        // 初始化期间不触发保存事件
+        // 初始化阶段只是还原设置，不应反向触发一次新的保存流程。
         if (_isInitializing)
         {
             return;
         }
 
-        // 触发事件，通知 MainViewModel 保存设置
+        // 由 MainViewModel 统一负责设置持久化，避免子 ViewModel 直接依赖设置服务。
         InputVisibilityChanged?.Invoke(this, value);
     }
 

@@ -18,6 +18,10 @@ using System.IO;
 
 namespace DesktopMemo.App.ViewModels;
 
+/// <summary>
+/// 应用主视图模型。
+/// 负责协调备忘录编辑、待办模式切换、窗口设置、托盘交互以及本地化状态。
+/// </summary>
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IMemoRepository _memoRepository;
@@ -30,6 +34,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ILocalizationService _localizationService;
     private readonly ILogService _logService;
     private readonly LogViewModel _logViewModel;
+    // 高频设置变更统一走防抖保存，避免拖拽窗口或快速切换选项时持续刷盘。
     private readonly DebounceHelper _settingsSaveDebouncer;
 
     [ObservableProperty]
@@ -118,6 +123,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private bool _isDisposing;
     private bool _isInitializing;
+
+    // 进入编辑模式时记录初始正文，用于判断是否存在未保存修改。
     private string? _originalContent;
 
     [ObservableProperty]
@@ -179,6 +186,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         InitializeAppInfo();
     }
 
+    /// <summary>
+    /// 启动时恢复设置、加载数据并初始化托盘与待办视图。
+    /// </summary>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _isInitializing = true;
@@ -205,6 +215,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         Memos = new ObservableCollection<Memo>(memos.OrderByDescending(m => m.UpdatedAt));
 
+        // 默认选中最新一条备忘录，让编辑区在启动后马上可用。
         SelectedMemo = Memos.FirstOrDefault();
         if (SelectedMemo is not null)
         {
@@ -226,7 +237,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _trayService.Hide();
         }
 
-        // 初始化 TodoListViewModel
+        // 待办子视图模型在主流程中统一初始化，保证页面切换时状态已就绪。
         await _todoListViewModel.InitializeAsync(cancellationToken);
 
         // 初始化选择的语言
@@ -238,7 +249,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 初始化托盘菜单文本
         _trayService.UpdateMenuTexts(key => _localizationService[key]);
 
-        // 恢复上次的页面状态
+        // 恢复“备忘录页 / 待办页”停留位置，减少重启后的上下文丢失。
         if (settings.CurrentPage == "todo")
         {
             IsInTodoListMode = true;
@@ -252,12 +263,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _trayService.UpdateTopmostState(SelectedTopmostMode);
         _trayService.UpdateClickThroughState(IsClickThroughEnabled);
 
-        // 检查开机自启动状态
+        // 自启动状态依赖注册表，需要在 UI 与服务初始化后补查。
         CheckAutoStartStatus();
         
         _isInitializing = false;
     }
 
+    /// <summary>
+    /// 把持久化设置映射为当前运行态，并同步到底层窗口服务。
+    /// </summary>
     private void ApplyWindowSettings(WindowSettings settings)
     {
         WindowSettings = settings;
@@ -271,7 +285,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _windowService.SetWindowPosition(settings.Left, settings.Top);
         }
 
-        // 确保透明度值在合理范围内
+        // 设置文件可能来自旧版本或被用户手工修改，需要先做归一化。
         var transparencyValue = TransparencyHelper.NormalizeTransparency(settings.Transparency);
         System.Diagnostics.Debug.WriteLine($"设置加载: 原始透明度={settings.Transparency}, 规范化后={transparencyValue}");
 
@@ -284,11 +298,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         SelectedTopmostMode = _windowService.GetCurrentTopmostMode();
 
-        // 从窗口服务获取实际设置的透明度值
+        // 再次读取窗口服务中的实际值，确保 ViewModel 和底层服务状态一致。
         var actualOpacity = _windowService.GetWindowOpacity();
         BackgroundOpacity = actualOpacity;
 
-        // 使用统一的透明度转换逻辑，并确保百分比值有效
+        // 百分比是 UI 展示值，真实透明度仍以 0~MAX_TRANSPARENCY 的值保存。
         var calculatedPercent = TransparencyHelper.ToPercent(actualOpacity);
         BackgroundOpacityPercent = double.IsNaN(calculatedPercent) ? 0.0 : calculatedPercent;
 
@@ -296,7 +310,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         
         IsClickThroughEnabled = _windowService.IsClickThroughEnabled;
         
-        // 恢复窗口固定状态
+        // 固定状态只影响界面行为，由 ViewModel 维护并持久化。
         System.Diagnostics.Debug.WriteLine($"[ApplyWindowSettings] 恢复窗口固定状态: {settings.IsWindowPinned}");
         IsWindowPinned = settings.IsWindowPinned;
         
@@ -320,6 +334,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SetStatus($"透明度已调整为 {(int)percent}%");
     }
 
+    /// <summary>
+    /// 主窗口尺寸变化时更新内存设置，并在高频变化场景下延迟保存。
+    /// </summary>
     public void UpdateMainWindowSize(double width, double height, bool immediateSave = false)
     {
         if (_isInitializing)
@@ -347,6 +364,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    /// <summary>
+    /// 设置窗口移动或缩放后同步边界信息。
+    /// </summary>
     public void UpdateSettingsWindowBounds(double width, double height, double left, double top, bool immediateSave = false)
     {
         if (_isInitializing)
@@ -391,6 +411,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var memo = Memo.CreateNew(_localizationService["Memo_NewTitle"], string.Empty);
         await _memoRepository.AddAsync(memo);
 
+        // 新建后直接切换到编辑态，符合便签工具“即建即写”的使用预期。
         Memos.Insert(0, memo);
         SelectedMemo = memo;
         EditorTitle = memo.Title;
@@ -409,6 +430,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // 内容和元数据采用不可变 record 链式更新，保证修改轨迹清晰。
         var updated = SelectedMemo
             .WithContent(EditorContent, DateTimeOffset.Now)
             .WithMetadata(EditorTitle, SelectedMemo.Tags, SelectedMemo.IsPinned, DateTimeOffset.Now);
@@ -422,6 +444,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SelectedMemo = updated;
         }
 
+        // 保存成功后重置“脏状态”基线。
         _originalContent = EditorContent;
         IsContentModified = false;
 
@@ -438,13 +461,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        // 检查是否需要显示确认框
+        // 删除确认由设置控制；真正删除前先在 UI 线程显示对话框。
         if (WindowSettings.ShowDeleteConfirmation)
         {
             Views.ConfirmationDialog? dialog = null;
             bool? result = null;
 
-            // 在UI线程上显示对话框
+            // 对话框必须在 UI 线程创建和显示，否则 WPF Owner 关系会不稳定。
             try
             {
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
@@ -454,7 +477,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _localizationService["Dialog_DeleteConfirm_Title"],
                         string.Format(_localizationService["Dialog_DeleteConfirm_Message"], SelectedMemo.DisplayTitle));
 
-                    // 安全地设置Owner
+                    // Owner 仅在主窗口已加载时设置，避免 ShowDialog 因窗口状态异常抛错。
                     if (System.Windows.Application.Current.MainWindow != null &&
                         System.Windows.Application.Current.MainWindow.IsLoaded)
                     {
@@ -503,14 +526,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            // 如果用户选择了"不再显示"，立即更新内存中的设置，然后异步保存
+            // “不再显示”需要立即落到内存，避免后续其他设置保存把它覆盖回去。
             if (dialog.DontShowAgain)
             {
-                // 立即更新内存中的设置，避免被后续的设置保存覆盖
                 var newSettings = WindowSettings with { ShowDeleteConfirmation = false };
                 WindowSettings = newSettings;
 
-                // 异步保存到磁盘（不等待，避免阻塞删除操作）
+                // 删除动作不应被设置保存阻塞，因此这里 fire-and-forget。
                 _ = Task.Run(async () =>
                 {
                     try
@@ -520,14 +542,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                     catch (Exception ex)
                     {
-                        // 记录错误但不影响删除操作
+                        // 删除已获用户确认，设置保存失败不应反向阻断删除流程。
                         System.Diagnostics.Debug.WriteLine($"保存删除设置失败: {ex}");
                     }
                 });
             }
         }
 
-        // 执行删除操作
+        // 仓储层是软删除；UI 层则把当前项从可见集合中移除。
         var deleting = SelectedMemo;
         _logService.Info("Memo", $"删除备忘录: {deleting.Title}");
         await _memoRepository.DeleteAsync(deleting.Id);
@@ -557,7 +579,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IsSettingsPanelVisible = !IsSettingsPanelVisible;
         if (IsSettingsPanelVisible)
         {
-            IsLogPanelVisible = false; // 关闭日志面板
+            IsLogPanelVisible = false; // 设置与日志面板互斥，避免右侧空间冲突。
         }
         SetStatus(IsSettingsPanelVisible ? "打开设置" : "关闭设置");
     }
@@ -1116,7 +1138,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void SetStatus(string status, LogLevel logLevel = LogLevel.Info)
     {
-        // 记录到日志系统
+        // 所有用户可感知状态都统一进日志，便于问题排查和后续日志面板展示。
         switch (logLevel)
         {
             case LogLevel.Debug:
@@ -1133,7 +1155,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 break;
         }
         
-        // 更新托盘图标文本（仅显示重要信息）
+        // 托盘文本只同步信息级别及以上状态，避免调试日志刷屏。
         if (logLevel >= LogLevel.Info)
         {
             _trayService.UpdateText($"DesktopMemo - {status}");
@@ -1152,13 +1174,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnLanguageChanged(object? sender, LanguageChangedEventArgs e)
     {
-        // 通知 UI 刷新所有本地化文本
+        // 索引器式本地化绑定需要主动触发属性变更，UI 才会重新取值。
         OnPropertyChanged(nameof(LocalizationService));
-        
-        // 更新应用信息（使用新语言）
+
+        // 依赖本地化字符串的组合文本都需要重新生成。
         InitializeAppInfo();
-        
-        // 更新托盘菜单文本
+
         _trayService.UpdateMenuTexts(key => _localizationService[key]);
     }
 
@@ -1166,13 +1187,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (value != null && value.Name != _localizationService.CurrentCulture.Name)
         {
-            // 切换语言
+            // 先切运行时语言，再异步持久化，确保界面响应优先。
             _localizationService.ChangeLanguage(value.Name);
-            
-            // 更新内存中的设置
+
             WindowSettings = WindowSettings with { PreferredLanguage = value.Name };
-            
-            // 保存到设置（异步）
+
             _ = Task.Run(async () =>
             {
                 try
@@ -1196,10 +1215,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!_isInitializing)
         {
-            // 更新内存中的设置
+            // 主题切换同样采用“先生效、后持久化”的策略。
             WindowSettings = WindowSettings with { Theme = value };
-            
-            // 保存到设置（异步）
+
             _ = Task.Run(async () =>
             {
                 try
@@ -1224,7 +1242,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _logService.Info("Settings", $"切换主题到 {themeName}");
             SetStatus($"主题已切换到 {themeName}");
             
-            // 触发主题变更事件，让MainWindow更新UI
+            // MainWindow 需要额外处理资源字典切换，因此通过事件通知 View。
             ThemeChanged?.Invoke(this, value);
         }
     }
@@ -1287,13 +1305,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnIsInTodoListModeChanged(bool value)
     {
-        // 初始化期间不保存设置，避免覆盖刚加载的设置
+        // 初始化阶段只是回放历史状态，不应立刻覆盖磁盘中的原值。
         if (_isInitializing)
         {
             return;
         }
         
-        // 保存当前页面状态
         var currentPage = value ? "todo" : "memo";
         if (WindowSettings.CurrentPage == currentPage)
         {
@@ -1302,7 +1319,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         WindowSettings = WindowSettings with { CurrentPage = currentPage };
         
-        // 异步保存到设置
+        // 页面切换不需要阻塞 UI，直接异步保存即可。
         _ = Task.Run(async () =>
         {
             try
@@ -1319,10 +1336,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnTodoInputVisibilityChanged(object? sender, bool isVisible)
     {
-        // 更新设置
+        // 待办输入框可见性属于用户偏好，由主视图模型统一纳入设置。
         WindowSettings = WindowSettings with { TodoInputVisible = isVisible };
-        
-        // 异步保存到设置
+
         _ = Task.Run(async () =>
         {
             try
@@ -1341,19 +1357,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         System.Diagnostics.Debug.WriteLine($"[OnIsWindowPinnedChanged] 被触发: value={value}, _isInitializing={_isInitializing}");
         
-        // 初始化期间不保存设置，避免覆盖刚加载的设置
+        // 初始化阶段只是回放历史状态，不应立刻覆盖磁盘中的原值。
         if (_isInitializing)
         {
             System.Diagnostics.Debug.WriteLine($"[OnIsWindowPinnedChanged] 初始化期间，跳过保存");
             return;
         }
         
-        // 更新内存中的设置
         var oldSettings = WindowSettings;
         WindowSettings = WindowSettings with { IsWindowPinned = value };
         System.Diagnostics.Debug.WriteLine($"[OnIsWindowPinnedChanged] 更新设置: {oldSettings.IsWindowPinned} -> {WindowSettings.IsWindowPinned}");
         
-        // 异步保存到设置
         _ = Task.Run(async () =>
         {
             try
@@ -1380,6 +1394,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _disposed = true;
         _isDisposing = true;
 
+        // 释放顺序上先隐藏托盘再释放其资源，避免图标残留。
         if (IsTrayEnabled)
         {
             _trayService.Hide();

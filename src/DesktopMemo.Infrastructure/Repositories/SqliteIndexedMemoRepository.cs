@@ -19,6 +19,7 @@ namespace DesktopMemo.Infrastructure.Repositories;
 /// 混合存储架构的备忘录 Repository：
 /// - SQLite 存储元数据索引（快速查询）
 /// - Markdown 文件存储完整内容（可移植性）
+/// 这样既保留文本文件的可迁移性，又能获得列表查询和筛选时的数据库性能。
 /// </summary>
 public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 {
@@ -39,6 +40,10 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
         InitializeDatabase();
     }
 
+    /// <summary>
+    /// 初始化 SQLite 元数据表与索引。
+    /// 该方法只负责元数据结构，正文内容仍由 Markdown 文件承载。
+    /// </summary>
     private void InitializeDatabase()
     {
         using var connection = new SqliteConnection(_connectionString);
@@ -125,10 +130,10 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // 从 Markdown 文件读取内容
+                // 列表查询先走数据库拿索引，再按文件路径加载正文。
                 var content = await LoadContentFromFileAsync(dto.FilePath, cancellationToken).ConfigureAwait(false);
 
-                // 回退：若数据库记录的 file_path 无法读取，则尝试使用标准路径并自愈更新数据库
+                // 若数据库中的 file_path 已过期，则按标准命名规则回退并顺手修复元数据。
                 if (content == null)
                 {
                     var id = Guid.Parse(dto.Id);
@@ -224,7 +229,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
             var filePath = GetMemoPath(memo.Id);
             var tempFilePath = filePath + ".tmp";
 
-            // 1. 先写入临时文件
+            // 先写临时 Markdown 文件，再写数据库，尽量避免出现“数据库有记录但正文文件不完整”的状态。
             await SaveContentToFileAsync(tempFilePath, memo, cancellationToken).ConfigureAwait(false);
 
             // 2. 保存元数据到 SQLite
@@ -235,7 +240,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 
             try
             {
-                // 插入备忘录元数据
+                // 事务内写入索引和标签，确保元数据始终自洽。
                 const string insertMemoSql = @"
                     INSERT INTO memos (
                         id, title, preview, is_pinned, created_at, updated_at,
@@ -258,7 +263,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
                     SyncStatus = (int)memo.SyncStatus
                 }, transaction).ConfigureAwait(false);
 
-                // 插入标签
+                // 标签去重后逐条写入关联表。
                 if (memo.Tags.Any())
                 {
                     const string insertTagSql = "INSERT INTO memo_tags (memo_id, tag) VALUES (@MemoId, @Tag)";
@@ -274,14 +279,14 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-                // 3. 事务成功后，将临时文件重命名为正式文件
+                // 数据库提交成功后再原子替换正式文件，减少部分写入留下坏文件的风险。
                 File.Move(tempFilePath, filePath, overwrite: true);
             }
             catch
             {
                 await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
 
-                // 事务失败，删除临时文件
+                // 回滚后清理临时文件，避免后续恢复时误判为有效内容。
                 if (File.Exists(tempFilePath))
                 {
                     File.Delete(tempFilePath);
@@ -304,7 +309,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
             var filePath = GetMemoPath(memo.Id);
             var tempFilePath = filePath + ".tmp";
 
-            // 1. 先写入临时文件
+            // 更新沿用“临时文件 + 数据库事务 + 原子替换”的写入策略。
             await SaveContentToFileAsync(tempFilePath, memo, cancellationToken).ConfigureAwait(false);
 
             // 2. 更新 SQLite 元数据
@@ -315,7 +320,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 
             try
             {
-                // 更新备忘录元数据
+                // 正文写入文件，数据库只更新列表展示和检索需要的字段。
                 const string updateMemoSql = @"
                     UPDATE memos SET
                         title = @Title,
@@ -342,11 +347,11 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
                     throw new InvalidOperationException($"Memo {memo.Id} 不存在或已删除");
                 }
 
-                // 删除旧标签
+                // 标签模型当前采用全量替换，逻辑简单且对数据量足够友好。
                 const string deleteTagsSql = "DELETE FROM memo_tags WHERE memo_id = @MemoId";
                 await connection.ExecuteAsync(deleteTagsSql, new { MemoId = memo.Id.ToString() }, transaction).ConfigureAwait(false);
 
-                // 插入新标签
+                // 插回新的标签集合。
                 if (memo.Tags.Any())
                 {
                     const string insertTagSql = "INSERT INTO memo_tags (memo_id, tag) VALUES (@MemoId, @Tag)";
@@ -362,14 +367,14 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-                // 3. 事务成功后，将临时文件重命名为正式文件
+                // 元数据落库成功后，再让正文文件生效。
                 File.Move(tempFilePath, filePath, overwrite: true);
             }
             catch
             {
                 await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
 
-                // 事务失败，删除临时文件
+                // 出错时清理临时文件，避免遗留脏状态。
                 if (File.Exists(tempFilePath))
                 {
                     File.Delete(tempFilePath);
@@ -392,7 +397,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
             using var connection = new SqliteConnection(_connectionString);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-            // 软删除（标记为已删除，支持云同步和数据恢复）
+            // 软删除保留文件和标签，便于后续恢复或同步系统识别删除事件。
             const string updateMemoSql = @"
                 UPDATE memos
                 SET deleted_at = @DeletedAt,
@@ -418,6 +423,9 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
 
     private string GetMemoPath(Guid id) => Path.Combine(_contentDirectory, $"{id:N}.md");
 
+    /// <summary>
+    /// 读取 Markdown 正文，并跳过文件开头的 YAML Front Matter。
+    /// </summary>
     private async Task<string?> LoadContentFromFileAsync(string filePath, CancellationToken cancellationToken)
     {
         if (!File.Exists(filePath))
@@ -430,7 +438,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
             await using var stream = File.OpenRead(filePath);
             using var reader = new StreamReader(stream, Encoding.UTF8);
 
-            // 跳过 YAML Front Matter
+            // Markdown 文件头部保存元数据，这里只返回正文给领域模型。
             var firstLine = await reader.ReadLineAsync().ConfigureAwait(false);
             if (firstLine?.Equals("---", StringComparison.Ordinal) == true)
             {
@@ -444,7 +452,6 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
                 }
             }
 
-            // 读取内容
             return await reader.ReadToEndAsync().ConfigureAwait(false);
         }
         catch (UnauthorizedAccessException ex)
@@ -464,6 +471,9 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
         }
     }
 
+    /// <summary>
+    /// 将备忘录写回 Markdown 文件，front matter 与正文保持同源输出。
+    /// </summary>
     private async Task SaveContentToFileAsync(string filePath, Memo memo, CancellationToken cancellationToken)
     {
         var builder = new StringBuilder();
@@ -511,7 +521,7 @@ public sealed class SqliteIndexedMemoRepository : IMemoRepository, IDisposable
                 ? Array.Empty<string>()
                 : Tags.Split(',', StringSplitOptions.RemoveEmptyEntries);
 
-            // 兼容空字符串与非ISO格式的时间
+            // 兼容旧数据、空字符串和非标准时间格式，避免单条脏数据拖垮整个列表读取。
             static DateTimeOffset ParseRequired(string value)
             {
                 if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
